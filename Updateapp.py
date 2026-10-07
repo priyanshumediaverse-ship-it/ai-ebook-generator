@@ -70,7 +70,8 @@ def generate_ebook_content(gemini_key, topic, page_count):
     
     # Updated to gemini-2.5-flash for fixed model resolution
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash",
+
         contents=prompt
     )
     return response.text
