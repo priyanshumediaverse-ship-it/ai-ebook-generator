@@ -1,8 +1,6 @@
 import streamlit as st
 import requests
-import os
 import io
-from PIL import Image
 from google import genai
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.colors import HexColor
@@ -10,14 +8,12 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RL
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen import canvas
 
-# --- Page Configuration ---
 st.set_page_config(
-    page_title="AI E-Book Generator",
-    page_icon="📚",
+    page_title="AI Ultra E-Book Studio",
+    page_icon="📖",
     layout="wide"
 )
 
-# --- Numbered Canvas for Page Numbers & Footers ---
 class NumberedCanvas(canvas.Canvas):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -31,35 +27,28 @@ class NumberedCanvas(canvas.Canvas):
         num_pages = len(self._saved_page_states)
         for state in self._saved_page_states:
             self.__dict__.update(state)
-            self.draw_page_number(num_pages)
+            if self._pageNumber > 1:
+                self.saveState()
+                self.setFont("Helvetica", 9)
+                self.setFillColor(HexColor("#718096"))
+                self.drawRightString(612 - 54, 36, f"Page {self._pageNumber} of {num_pages}")
+                self.restoreState()
             super().showPage()
         super().save()
 
-    def draw_page_number(self, page_count):
-        if self._pageNumber == 1:
-            return  # Skip cover page
-        self.saveState()
-        self.setFont("Helvetica", 9)
-        self.setFillColor(HexColor("#666666"))
-        page_text = f"Page {self._pageNumber} of {page_count}"
-        self.drawRightString(612 - 54, 36, page_text)
-        self.restoreState()
-
-# --- Helper Functions ---
 def fetch_unsplash_image(query, api_key):
     if not api_key:
         return None
     url = f"https://api.unsplash.com/photos/random?query={query}&orientation=landscape&client_id={api_key}"
     try:
-        res = requests.get(url, timeout=10)
+        res = requests.get(url, timeout=8)
         if res.status_code == 200:
-            data = res.json()
-            img_url = data['urls']['regular']
-            img_res = requests.get(img_url, timeout=10)
+            img_url = res.json()['urls']['regular']
+            img_res = requests.get(img_url, timeout=8)
             if img_res.status_code == 200:
                 return io.BytesIO(img_res.content)
-    except Exception as e:
-        st.warning(f"Failed to fetch image for '{query}': {e}")
+    except Exception:
+        pass
     return None
 
 def generate_ebook_content(gemini_key, topic, page_count):
@@ -67,19 +56,19 @@ def generate_ebook_content(gemini_key, topic, page_count):
     target_chapters = max(3, min(page_count, 15))
     
     prompt = f"""
-    You are a professional author and subject matter expert.
-    Write a comprehensive, highly engaging, and structured e-book on the topic: "{topic}".
-    The target length of the e-book is approximately {page_count} pages.
-    Structure the book into exactly {target_chapters} well-developed chapters.
+    You are an expert author writing a high-quality book titled: "{topic}".
+    Target length: approx {page_count} pages.
+    Create exactly {target_chapters} detailed chapters with practical insights, subheadings, and deep content.
 
-    Format the output strictly as follows for each chapter:
-    [CHAPTER_TITLE] Chapter Title Here
-    [CHAPTER_IMAGE_KEYWORD] single_word_keyword_for_image
+    Format strictly as:
+    [CHAPTER_TITLE] Chapter Name Here
+    [CHAPTER_IMAGE_KEYWORD] single_word_keyword
     [CHAPTER_CONTENT]
-    Detailed paragraphs and actionable insights for this chapter...
+    Full text content here...
     [END_CHAPTER]
     """
     
+    # Updated to gemini-2.5-flash for fixed model resolution
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt
@@ -99,168 +88,92 @@ def parse_generated_text(raw_text):
             
             lines = [line.strip() for line in header_part.split("\n") if line.strip()]
             title = lines[0] if lines else "Chapter"
-            keyword = "abstract"
+            keyword = "book"
             for line in lines:
                 if line.startswith("[CHAPTER_IMAGE_KEYWORD]"):
                     keyword = line.replace("[CHAPTER_IMAGE_KEYWORD]", "").strip()
             
-            chapters.append({
-                "title": title,
-                "keyword": keyword,
-                "content": content
-            })
+            chapters.append({"title": title, "keyword": keyword, "content": content})
         except Exception:
             continue
     return chapters
 
 def create_pdf(topic, author, chapters, unsplash_key, primary_color, secondary_color, text_color):
     pdf_buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        pdf_buffer,
-        pagesize=letter,
-        leftMargin=54, rightMargin=54,
-        topMargin=54, bottomMargin=54
-    )
-    
+    doc = SimpleDocTemplate(pdf_buffer, pagesize=letter, leftMargin=54, rightMargin=54, topMargin=54, bottomMargin=54)
     styles = getSampleStyleSheet()
     
-    cover_title_style = ParagraphStyle(
-        'CoverTitle',
-        parent=styles['Title'],
-        fontName='Helvetica-Bold',
-        fontSize=32,
-        leading=38,
-        textColor=HexColor(primary_color),
-        alignment=1,
-        spaceAfter=20
-    )
-    
-    cover_author_style = ParagraphStyle(
-        'CoverAuthor',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=16,
-        leading=20,
-        textColor=HexColor(secondary_color),
-        alignment=1,
-        spaceAfter=40
-    )
-    
-    h1_style = ParagraphStyle(
-        'Heading1_Custom',
-        parent=styles['Heading1'],
-        fontName='Helvetica-Bold',
-        fontSize=22,
-        leading=26,
-        textColor=HexColor(primary_color),
-        spaceBefore=15,
-        spaceAfter=15
-    )
-    
-    body_style = ParagraphStyle(
-        'Body_Custom',
-        parent=styles['BodyText'],
-        fontName='Helvetica',
-        fontSize=11,
-        leading=16,
-        textColor=HexColor(text_color),
-        spaceAfter=12
-    )
+    title_style = ParagraphStyle('CoverTitle', parent=styles['Title'], fontName='Helvetica-Bold', fontSize=30, leading=36, textColor=HexColor(primary_color), alignment=1, spaceAfter=20)
+    author_style = ParagraphStyle('CoverAuthor', parent=styles['Normal'], fontName='Helvetica', fontSize=15, leading=18, textColor=HexColor(secondary_color), alignment=1, spaceAfter=30)
+    h1_style = ParagraphStyle('H1', parent=styles['Heading1'], fontName='Helvetica-Bold', fontSize=20, leading=24, textColor=HexColor(primary_color), spaceBefore=15, spaceAfter=15)
+    body_style = ParagraphStyle('Body', parent=styles['BodyText'], fontName='Helvetica', fontSize=11, leading=16, textColor=HexColor(text_color), spaceAfter=12)
 
-    story = []
-
-    # --- Cover Page ---
-    story.append(Spacer(1, 100))
-    story.append(Paragraph(topic, cover_title_style))
-    story.append(Paragraph(f"By {author}", cover_author_style))
+    story = [Spacer(1, 80), Paragraph(topic, title_style), Paragraph(f"By {author}", author_style)]
     
-    cover_img_data = fetch_unsplash_image(topic, unsplash_key)
-    if cover_img_data:
-        story.append(RLImage(cover_img_data, width=400, height=250))
-    
+    cover_img = fetch_unsplash_image(topic, unsplash_key)
+    if cover_img:
+        story.append(RLImage(cover_img, width=420, height=240))
     story.append(PageBreak())
 
-    # --- Chapters ---
     for idx, chap in enumerate(chapters, 1):
         story.append(Paragraph(f"Chapter {idx}: {chap['title']}", h1_style))
+        chap_img = fetch_unsplash_image(chap['keyword'], unsplash_key)
+        if chap_img:
+            story.append(RLImage(chap_img, width=420, height=210))
+            story.append(Spacer(1, 12))
         
-        chap_img_data = fetch_unsplash_image(chap['keyword'], unsplash_key)
-        if chap_img_data:
-            story.append(RLImage(chap_img_data, width=450, height=225))
-            story.append(Spacer(1, 15))
-        
-        paragraphs = chap['content'].split("\n\n")
-        for p in paragraphs:
+        for p in chap['content'].split("\n\n"):
             if p.strip():
                 story.append(Paragraph(p.strip(), body_style))
-        
         story.append(PageBreak())
 
     doc.build(story, canvasmaker=NumberedCanvas)
     pdf_buffer.seek(0)
     return pdf_buffer
 
-# --- UI Interface ---
-st.title("📚 AI-Driven Automated E-Book Generator")
-st.markdown("Create fully stylized, image-rich e-books in seconds using Gemini AI & Unsplash.")
+# --- UI Setup ---
+st.title("🚀 AI Ultra E-Book Studio")
 
 with st.sidebar:
-    st.header("🔑 API Credentials")
+    st.subheader("🔑 API Keys")
     gemini_key = st.text_input("Gemini API Key", type="password")
     unsplash_key = st.text_input("Unsplash Access Key", type="password")
     
-    st.header("🎨 Styling & Design")
-    primary_color = st.color_picker("Primary / Title Color", "#1A365D")
-    secondary_color = st.color_picker("Secondary / Subtitle Color", "#2B6CB0")
-    text_color = st.color_picker("Body Text Color", "#2D3748")
+    st.subheader("🎨 Custom Styling")
+    primary_color = st.color_picker("Primary / Heading Color", "#1E3A8A")
+    secondary_color = st.color_picker("Subtitle Color", "#3B82F6")
+    text_color = st.color_picker("Body Text Color", "#1F2937")
 
-col1, col2 = st.columns([1, 1])
+c1, c2 = st.columns([1, 1])
 
-with col1:
-    st.header("📖 E-Book Details")
-    topic = st.text_input("E-Book Topic / Title", "Mastering Artificial Intelligence in 2026")
-    author = st.text_input("Author Name", "Priyanshu")
-    page_count = st.slider("Target Page Count", min_value=3, max_value=100, value=10)
+with c1:
+    st.subheader("⚙️ Book Configuration")
+    topic = st.text_input("Book Title", "How To Make Money By Selling AI Digital Products")
+    author = st.text_input("Author Name", "Apex")
+    page_count = st.slider("Target Page Count", 3, 50, 15)
     
-    generate_btn = st.button("🚀 Generate E-Book", type="primary")
+    btn = st.button("🔥 Generate Full E-Book", type="primary", use_container_width=True)
 
-if generate_btn:
+if btn:
     if not gemini_key:
-        st.error("Please enter your Gemini API Key in the sidebar.")
+        st.error("Please provide Gemini API Key in sidebar!")
     else:
-        with st.spinner("Generating e-book content with AI..."):
+        with st.spinner("AI is generating book text & auto-searching Unsplash images..."):
             try:
                 raw_text = generate_ebook_content(gemini_key, topic, page_count)
                 chapters = parse_generated_text(raw_text)
-                
-                if not chapters:
-                    st.error("Failed to parse content. Please try again.")
-                else:
-                    st.success(f"Generated {len(chapters)} chapters successfully!")
-                    
-                    with st.spinner("Building PDF with auto-inserted images..."):
-                        pdf_data = create_pdf(
-                            topic, author, chapters, unsplash_key,
-                            primary_color, secondary_color, text_color
-                        )
-                    
-                    st.session_state['pdf_data'] = pdf_data
-                    st.session_state['chapters'] = chapters
+                pdf_data = create_pdf(topic, author, chapters, unsplash_key, primary_color, secondary_color, text_color)
+                st.session_state['pdf'] = pdf_data
+                st.session_state['ch'] = chapters
+                st.success("E-Book successfully created!")
             except Exception as e:
-                st.error(f"An error occurred: {e}")
+                st.error(f"Error: {e}")
 
-if 'pdf_data' in st.session_state:
-    with col2:
-        st.header("📥 Preview & Download")
-        st.download_button(
-            label="📄 Download E-Book (PDF)",
-            data=st.session_state['pdf_data'],
-            file_name=f"{topic.replace(' ', '_')}_ebook.pdf",
-            mime="application/pdf"
-        )
-        
-        st.subheader("Chapter Breakdown Preview")
-        for ch in st.session_state['chapters']:
+if 'pdf' in st.session_state:
+    with c2:
+        st.subheader("📥 Download & Live Chapter Preview")
+        st.download_button("⬇️ Download E-Book (PDF)", data=st.session_state['pdf'], file_name=f"{topic}.pdf", mime="application/pdf", use_container_width=True)
+        for ch in st.session_state['ch']:
             with st.expander(ch['title']):
-                st.write(ch['content'][:300] + "...")
-  
+                st.write(ch['content'][:400] + "...")
+                                                  
